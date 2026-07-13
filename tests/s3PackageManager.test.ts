@@ -336,6 +336,40 @@ describe('S3PackageManager', () => {
       });
       expect(opened).toBe(true);
     });
+
+    // Regression: a failing/aborted upload must NOT crash the process.
+    // The upload promise rejects; when the client aborts, done()/onEnd
+    // never runs, so without the floating .catch() the rejection would
+    // surface as an unhandledRejection and take down the whole registry.
+    test('failed upload with done() never called does not throw unhandledRejection', async () => {
+      // s3.send throws for everything except the Head 404 → Upload.done() rejects.
+      const s3 = createFakeS3((cmd) => {
+        if (cmd instanceof HeadObjectCommand) throw s3Error('NotFound', 404);
+        throw s3Error('RequestAbortedError', 500);
+      });
+
+      const unhandled: unknown[] = [];
+      const onUnhandled = (r: unknown): void => {
+        unhandled.push(r);
+      };
+      process.on('unhandledRejection', onUnhandled);
+      try {
+        const pm = new S3PackageManager(makeConfig(), 'my-pkg', logger, s3);
+        const stream = pm.writeTarball('aborted.tgz');
+        // consume the emitted error so the stream itself doesn't throw,
+        // but deliberately DO NOT call stream.done() — mimics an abort.
+        stream.on('error', () => {});
+        stream.on('open', () => {
+          stream.write(Buffer.from('x'));
+          stream.end();
+        });
+        // let the Upload attempt + reject and microtasks flush.
+        await new Promise((r) => setTimeout(r, 200));
+      } finally {
+        process.off('unhandledRejection', onUnhandled);
+      }
+      expect(unhandled).toEqual([]);
+    });
   });
 
   describe('packagePath with custom storage', () => {

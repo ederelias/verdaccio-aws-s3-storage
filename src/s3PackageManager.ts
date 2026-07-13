@@ -382,6 +382,8 @@ export default class S3PackageManager {
           throw error;
         });
 
+        void uploadPromise.catch(() => {});
+
         uploadStream.emit('open');
         this.logger.trace({name}, 'aws-s3-storage: [writeTarball] emitted open for name=@{name}');
 
